@@ -33,9 +33,18 @@ jobs:
           echo "full_image=${{ env.SWR_REGISTRY }}/${{ env.SWR_NAMESPACE }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
           echo "n9_image=${{ env.N9_REGISTRY }}/${{ env.N9_NAMESPACE }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
 
-      - name: Login to SWR (cn-north-4)
+      # north-4 原账号密码已过期（2026-10-12 实测 Authenticate Error），改 token 流。
+      # 凭证 N4_AK / N4_SK 存在仓库 secrets（OBS robotwin-assets/key/credentials.csv 那对）。
+      - name: Login to SWR (cn-north-4) via token
+        env:
+          N4_AK: ${{ secrets.N4_AK }}
+          N4_SK: ${{ secrets.N4_SK }}
         run: |
-          echo "${{ secrets.SWR_PASSWORD }}" | docker login ${{ env.SWR_REGISTRY }} -u "${{ secrets.SWR_USERNAME }}" --password-stdin
+          mkdir -p ~/.docker
+          curl -fsSL -o /tmp/hcloud.tgz "https://ap-southeast-3-hwcloudcli.obs.ap-southeast-3.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-amd64.tar.gz"
+          tar -xzf /tmp/hcloud.tgz -C /tmp
+          echo y | /tmp/hcloud SWR CreateAuthorizationToken --cli-region=cn-north-4 --cli-access-key="$N4_AK" --cli-secret-key="$N4_SK" > /tmp/swr-n4.json 2> /tmp/hcloud-n4.err; echo "hcloud exit: $?"; wc -c /tmp/swr-n4.json; head -c 120 /tmp/hcloud-n4.err
+          python3 -c "import json,os,re; t=json.loads(re.search(r'\{.*\}', open('/tmp/swr-n4.json').read(), re.S).group(0)); assert t.get('auths'); c=os.path.expanduser('~/.docker/config.json'); d=json.load(open(c)) if os.path.exists(c) else {}; d.setdefault('auths',{}).update(t['auths']); json.dump(d,open(c,'w')); print('swr auth merged')"
 
       # north-9 用 token 登录（同 opencode 仓库 docker-tools.yml 的做法）。
       # 凭证 HCLOUD_AK / HCLOUD_SK 需在仓库 secrets 里配（OBS 上 Robotwin access key 那对）。

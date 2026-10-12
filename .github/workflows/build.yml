@@ -9,6 +9,9 @@ on:
 env:
   SWR_REGISTRY: swr.cn-north-4.myhuaweicloud.com
   SWR_NAMESPACE: hwstaff_l00392796
+  # 同镜像再推一份到 cn-north-9（opencode 部署只登 north-9，见 xieyucheng123/opencode 的 BROWSER_IMAGE）
+  N9_REGISTRY: swr.cn-north-9.myhuaweicloud.com
+  N9_NAMESPACE: xieyucheng123
   IMAGE_NAME: chrome-cjk
 
 jobs:
@@ -28,21 +31,38 @@ jobs:
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "full_image=${{ env.SWR_REGISTRY }}/${{ env.SWR_NAMESPACE }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
+          echo "n9_image=${{ env.N9_REGISTRY }}/${{ env.N9_NAMESPACE }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
 
-      - name: Login to SWR
+      - name: Login to SWR (cn-north-4)
         run: |
           echo "${{ secrets.SWR_PASSWORD }}" | docker login ${{ env.SWR_REGISTRY }} -u "${{ secrets.SWR_USERNAME }}" --password-stdin
 
+      # north-9 用 token 登录（同 opencode 仓库 docker-tools.yml 的做法）。
+      # 凭证 HCLOUD_AK / HCLOUD_SK 需在仓库 secrets 里配（OBS 上 Robotwin access key 那对）。
+      - name: Login to SWR (cn-north-9) via token
+        env:
+          HCLOUD_AK: ${{ secrets.HCLOUD_AK }}
+          HCLOUD_SK: ${{ secrets.HCLOUD_SK }}
+        run: |
+          mkdir -p ~/.docker
+          curl -fsSL -o /tmp/hcloud.tgz "https://ap-southeast-3-hwcloudcli.obs.ap-southeast-3.myhuaweicloud.com/cli/latest/huaweicloud-cli-linux-amd64.tar.gz"
+          tar -xzf /tmp/hcloud.tgz -C /tmp
+          echo y | /tmp/hcloud SWR CreateAuthorizationToken --cli-region=cn-north-9 --cli-access-key="$HCLOUD_AK" --cli-secret-key="$HCLOUD_SK" > /tmp/swr.json 2> /tmp/hcloud.err; echo "hcloud exit: $?"; wc -c /tmp/swr.json; head -c 120 /tmp/hcloud.err
+          python3 -c "import json,os,re; t=json.loads(re.search(r'\{.*\}', open('/tmp/swr.json').read(), re.S).group(0)); assert t.get('auths'); c=os.path.expanduser('~/.docker/config.json'); d=json.load(open(c)) if os.path.exists(c) else {}; d.setdefault('auths',{}).update(t['auths']); json.dump(d,open(c,'w')); print('swr auth merged')"
+
       - name: Build image
         run: |
-          docker build -t ${{ steps.tag.outputs.full_image }} .
+          docker build -t ${{ steps.tag.outputs.full_image }} -t ${{ steps.tag.outputs.n9_image }} .
 
       - name: Push image
         run: |
           docker push ${{ steps.tag.outputs.full_image }}
+          docker push ${{ steps.tag.outputs.n9_image }}
 
       - name: Also tag and push latest
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           docker tag ${{ steps.tag.outputs.full_image }} ${{ env.SWR_REGISTRY }}/${{ env.SWR_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.SWR_REGISTRY }}/${{ env.SWR_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          docker tag ${{ steps.tag.outputs.n9_image }} ${{ env.N9_REGISTRY }}/${{ env.N9_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.N9_REGISTRY }}/${{ env.N9_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
